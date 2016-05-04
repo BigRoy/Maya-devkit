@@ -1271,7 +1271,7 @@ MBoundingBox DrawOverride::boundingBox(
     const SubNodeData::Ptr subNodeData = subNode->getData();
     if (!subNodeData) return MBoundingBox();
 
-    const double seconds = MAnimControl::currentTime().as(MTime::kSeconds);
+    const double seconds = shapeNode->nodeTime();
 
     // Handle transforms.
     const XformData::Ptr xform =

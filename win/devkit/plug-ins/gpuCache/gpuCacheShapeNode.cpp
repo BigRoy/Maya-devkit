@@ -36,6 +36,9 @@
 #include <maya/MSelectionMask.h>
 #include <maya/MHWGeometryUtilities.h>
 #include <maya/MFnTypedAttribute.h>
+#include <maya/MFnNumericAttribute.h>
+#include <maya/MFnUnitAttribute.h>
+#include <maya/MFnEnumAttribute.h>
 #include <maya/MGlobal.h>
 #include <maya/MHardwareRenderer.h>
 #include <maya/MViewport2Renderer.h>
@@ -57,6 +60,7 @@
 #include <maya/MVectorArray.h>
 #include <maya/MExternalContentInfoTable.h>
 #include <maya/MExternalContentLocationTable.h>
+#include <maya/MTime.h>
 
 #include <cassert>
 #include <climits>
@@ -511,6 +515,9 @@ const MString ShapeNode::drawRegistrantId("gpuCache" );
 
 MObject ShapeNode::aCacheFileName;
 MObject ShapeNode::aCacheGeomPath;
+MObject ShapeNode::aAnimOffset;
+MObject ShapeNode::aAnimSpeed;
+MObject ShapeNode::aAnimType;
 MCallbackId ShapeNode::fsModelEditorChangedCallbackId;
 
 const char* ShapeNode::nodeTypeName = "gpuCache";
@@ -672,6 +679,9 @@ MStatus ShapeNode::initialize()
 {
     MStatus stat;
     MFnTypedAttribute typedAttrFn;
+	MFnNumericAttribute numericAttrFn;
+	MFnUnitAttribute unitAttrFn;
+	MFnEnumAttribute enumAttrFn;
 
     // file name
     aCacheFileName = typedAttrFn.create("cacheFileName", "cfn",
@@ -687,6 +697,32 @@ MStatus ShapeNode::initialize()
     typedAttrFn.setInternal(true);
     stat = MPxNode::addAttribute(aCacheGeomPath);
     MCHECKERROR(stat, "MPxNode::addAttribute(aCacheFileName)");
+
+	aAnimOffset = unitAttrFn.create("animOffset", "animOffset", MFnUnitAttribute::kTime, 0.0);
+	unitAttrFn.setInternal(false);
+	unitAttrFn.setKeyable(true);
+	unitAttrFn.setHidden(false);
+	stat = MPxNode::addAttribute(aAnimOffset);
+	MCHECKERROR(stat, "MPxNode::addAttribute(aAnimOffset)");
+
+	aAnimSpeed = numericAttrFn.create("animSpeed", "animSpeed", MFnNumericData::kDouble, 1.0);
+	numericAttrFn.setInternal(false);
+	numericAttrFn.setKeyable(true);
+	numericAttrFn.setHidden(false);
+	numericAttrFn.setDefault(1.0);
+	stat = MPxNode::addAttribute(aAnimSpeed);
+	MCHECKERROR(stat, "MPxNode::addAttribute(aAnimSpeed)");
+
+	aAnimType = enumAttrFn.create("animType", "animType", (short)1);
+	enumAttrFn.addField(MString("Loop"), 0);
+	enumAttrFn.addField(MString("Once"), 1);
+	enumAttrFn.addField(MString("Ping-Pong"), 2);
+	enumAttrFn.addField(MString("Still"), 3);
+	enumAttrFn.setInternal(false);
+	enumAttrFn.setKeyable(true);
+	enumAttrFn.setHidden(false);
+	stat = MPxNode::addAttribute(aAnimType);
+	MCHECKERROR(stat, "MPxNode::addAttribute(animType)");
 
     if (Config::vp2OverrideAPI() != Config::kMPxDrawOverride) {
         fsModelEditorChangedCallbackId = MEventMessage::addEventCallback(
@@ -725,6 +761,30 @@ MStatus ShapeNode::uninitialize()
 	CacheFileRegistry::theCache().clear();
     
     return MStatus::kSuccess;
+}
+
+MStatus ShapeNode::setDependentsDirty( const MPlug &plugBeingDirtied, MPlugArray &affectedPlugs )
+{
+	if (plugBeingDirtied.attribute() == aAnimOffset)
+	{
+		fCacheAnimOffsetDirty = true;
+		MHWRender::MRenderer::setGeometryDrawDirty(thisMObject()); 
+		return MS::kSuccess;
+	}
+	else if (plugBeingDirtied.attribute() == aAnimSpeed)
+	{
+		fCacheAnimSpeedDirty = true;
+		MHWRender::MRenderer::setGeometryDrawDirty(thisMObject()); 
+		return MS::kSuccess;
+	}
+	else if (plugBeingDirtied.attribute() == aAnimType)
+	{
+		fCacheAnimTypeDirty = true;
+		MHWRender::MRenderer::setGeometryDrawDirty(thisMObject()); 
+		return MS::kSuccess;
+	}
+
+	return MPxNode::setDependentsDirty(plugBeingDirtied, affectedPlugs);
 }
 
 MStatus ShapeNode::init3dViewPostRenderCallbacks()
@@ -777,8 +837,17 @@ MStatus ShapeNode::init3dViewPostRenderCallbacks()
 ShapeNode::ShapeNode()
 :	fCachedGeometry()
 ,	fCacheReadingState(kCacheReadingDone)
+,   fCacheAnimTimeInterval(TimeInterval::kInvalid)
 {
 	fBufferCache = NULL;
+
+	// Default values
+	fCacheAnimSpeed = 1.0;
+	fCacheAnimOffset = 0.0;
+	fCacheAnimType = 1;
+	fCacheAnimSpeedDirty = true;
+	fCacheAnimOffsetDirty = true;
+	fCacheAnimTypeDirty = true;
 }
 
 ShapeNode::~ShapeNode()
@@ -856,7 +925,7 @@ unsigned int ShapeNode::getIntersectionAccelerator(
 }
 
 bool ShapeNode::getEdgeSnapPoint(const MPoint &rayPointSrc, const MVector &rayDirectionSrc, MPoint &theClosestPoint) {
-	const double seconds = MAnimControl::currentTime().as(MTime::kSeconds);
+	const double seconds = this->nodeTime();
 	gpuCacheIsectAccelParams accelParams = gpuCacheIsectAccelParams::autoUniformGridParams(); 
 	unsigned int numAccels = getIntersectionAccelerator(accelParams, seconds);
 	bool foundPoint = false;
@@ -959,7 +1028,7 @@ bool ShapeNode::readBuffers(const SubNode::Ptr subNode, double seconds)const{
 	if(fBufferCache!=NULL){
 		delete fBufferCache;
 	}
-	seconds = MAnimControl::currentTime().as(MTime::kSeconds);
+	seconds = this->nodeTime();
 	fBufferCache = new BufferCache(seconds);
 	if(fBufferCache == NULL){
 		return false;
@@ -975,7 +1044,7 @@ bool ShapeNode::readBuffers(const SubNode::Ptr subNode, double seconds)const{
 }
 
 void ShapeNode::closestPoint(const MPoint &toThisPoint, MPoint &theClosestPoint, double tolerance) {
-	const double seconds = MAnimControl::currentTime().as(MTime::kSeconds);
+	const double seconds = this->nodeTime();
 	gpuCacheIsectAccelParams accelParams = gpuCacheIsectAccelParams::autoUniformGridParams(); 
 	unsigned int numAccels = getIntersectionAccelerator(accelParams, seconds);
 	
@@ -1035,7 +1104,7 @@ void ShapeNode::closestPoint(const MPoint &toThisPoint, MPoint &theClosestPoint,
 }
 
 MStatus ShapeNode::closestIntersectWithNorm (const MPoint &toThisPoint, const MVector &thisDirection, MPoint &theClosestPoint, MVector &theClosestNormal){
-	const double seconds = MAnimControl::currentTime().as(MTime::kSeconds);
+	const double seconds = this->nodeTime();
 	gpuCacheIsectAccelParams accelParams = gpuCacheIsectAccelParams::autoUniformGridParams(); 
 	unsigned int numAccels = getIntersectionAccelerator(accelParams, seconds); 
 
@@ -1077,7 +1146,7 @@ MBoundingBox ShapeNode::boundingBox() const
     const SubNodeData::Ptr subNodeData = subNode->getData();
     if (!subNodeData) return MBoundingBox();
 
-    const double seconds = MAnimControl::currentTime().as(MTime::kSeconds);
+    const double seconds = this->nodeTime();
 
     // Handle transforms.
     const XformData::Ptr xform =
@@ -1957,7 +2026,7 @@ void ShapeUI::drawWireframe(const MDrawRequest & request, M3dView & view) const
     const SubNode::Ptr rootNode = node->getCachedGeometry();
     if (!rootNode) return;
 
-    const double seconds = MAnimControl::currentTime().as(MTime::kSeconds);
+    const double seconds = node->nodeTime();
 
     MMatrix projMatrix;
     view.projectionMatrix(projMatrix);
@@ -2029,7 +2098,7 @@ void ShapeUI::drawShaded(
     const SubNode::Ptr rootNode = node->getCachedGeometry();
     if (!rootNode) return;
 
-    const double seconds = MAnimControl::currentTime().as(MTime::kSeconds);
+    const double seconds = node->nodeTime();
 
     MMatrix projMatrix;
     view.projectionMatrix(projMatrix);
@@ -2292,7 +2361,7 @@ bool ShapeUI::select(
     const SubNode::Ptr rootNode = node->getCachedGeometry();
     if (!rootNode) { return false;}
 
-    const double seconds = MAnimControl::currentTime().as(MTime::kSeconds);
+    const double seconds = node->nodeTime();
 
     const bool boundingboxSelection =
         (M3dView::kBoundingBox == selectInfo.displayStyle());
@@ -2397,7 +2466,7 @@ bool ShapeUI::snap(MSelectInfo& snapInfo) const
     const SubNode::Ptr rootNode = node->getCachedGeometry();
     if (!rootNode) return false;
 
-    const double seconds = MAnimControl::currentTime().as(MTime::kSeconds);
+    const double seconds = node->nodeTime();
 
     M3dView view = snapInfo.view();
 
@@ -2447,4 +2516,115 @@ void ShapeNode::setExternalContent(const MExternalContentLocationTable& table)
     MPxSurfaceShape::setExternalContent(table);
 }
 
+}
+
+double clamp(double n, double lower, double upper) {
+  return std::max(lower, std::min(n, upper));
+}
+
+const double ShapeNode::nodeTime() const
+{
+	// Get time range of data
+	// TODO: This should be cached elsewhere since nodeTime() is called many times.
+	//		 Optimizing this method would help!
+
+	if (fCacheAnimOffsetDirty)
+	{ 
+		MPlug plug(thisMObject(), aAnimOffset);
+		plug.getValue(fCacheAnimOffset);
+	}
+
+	if (fCacheAnimSpeedDirty)
+	{ 
+		MPlug plug(thisMObject(), aAnimSpeed);
+		plug.getValue(fCacheAnimSpeed);
+	}
+
+	if (fCacheAnimTypeDirty)
+	{ 
+		MPlug plug(thisMObject(), aAnimType);
+		plug.getValue(fCacheAnimType);
+	}
+
+
+    const SubNode::Ptr geom = getCachedGeometry();
+    if (!geom) return 0.0;
+
+    const SubNodeData::Ptr geomData = geom->getData();
+    if (!geomData) return 0.0;
+
+	fCacheAnimTimeInterval = geomData->animTimeRange();
+
+	if (fCacheAnimType == 0) // Loop
+	{
+		// the animation is looped by skipping to the first frame once it has finished
+
+		// init values
+
+		double one_frame_in_seconds = MTime(1.0, MTime::uiUnit()).as(MTime::kSeconds);
+
+		double frame = (double)(MAnimControl::currentTime().as(MTime::kSeconds));
+		double animOffset = fCacheAnimOffset;
+		double speed = fCacheAnimSpeed;
+		double animStart = fCacheAnimTimeInterval.startTime();
+		double animLength = fCacheAnimTimeInterval.endTime() - animStart + one_frame_in_seconds;
+		
+		// chaosgroup loop
+		frame=fmod(animOffset+(frame-animStart)*speed, animLength);
+		if (frame<0)
+			frame+=animLength;
+		frame+=animStart;
+
+		return frame;
+
+	}
+	else if (fCacheAnimType == 1) // Play Once
+	{
+		// init values
+		double frame = (double)(MAnimControl::currentTime().as(MTime::kSeconds));
+		double animOffset = fCacheAnimOffset;
+		double speed = fCacheAnimSpeed;
+		double animStart = fCacheAnimTimeInterval.startTime();
+		
+		// chaosgroup play once
+		frame = (animOffset + (frame-animStart)*speed) + animStart;
+		return frame;
+	}
+	else if (fCacheAnimType == 2) // Ping-Pong
+	{
+		// The animation is looped by playing it backwards once the last frame 
+		// has been reached and then playing it forward again when the first frame is reached
+		double one_frame_in_seconds = MTime(1.0, MTime::uiUnit()).as(MTime::kSeconds);
+		double two_frames_in_seconds = 2*one_frame_in_seconds;
+
+		// init values
+		double frame = (double)(MAnimControl::currentTime().as(MTime::kSeconds));
+		double animOffset = fCacheAnimOffset;
+		double speed = fCacheAnimSpeed;
+		double animStart = fCacheAnimTimeInterval.startTime();
+		double animLength = fCacheAnimTimeInterval.endTime() - animStart + one_frame_in_seconds;
+
+		// chaosgroup ping pong: http://forums.chaosgroup.com/showthread.php?83634-VRayMesh&p=659199#post659199
+		frame=fmod(animOffset+(frame-animStart)*speed, animLength*2-two_frames_in_seconds); // subtract 2 to remove the duplicate frames
+		if (frame<0)
+			frame+=2*animLength-two_frames_in_seconds;
+		if (frame>=animLength) {
+			frame=2*animLength-two_frames_in_seconds-frame;
+		}
+		frame+=animStart*speed;
+
+		return frame;
+
+	}
+	else if (fCacheAnimType == 3) 
+	{
+		// Still - the animation is not played. 
+		// Instead just one frame of the animation is shown. 
+		// You can select which that frame is with the help of the Start offset parameter.
+		return fCacheAnimOffset;
+	}
+	else {
+		return 0.0;
+	}
+	
 }

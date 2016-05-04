@@ -87,6 +87,9 @@ public:
     static const MString drawRegistrantId;
     static MObject aCacheFileName;
     static MObject aCacheGeomPath;
+	static MObject aAnimSpeed;
+	static MObject aAnimOffset;
+	static MObject aAnimType;
 	static const char* nodeTypeName;
 	static const char* selectionMaskName;
 
@@ -99,6 +102,8 @@ public:
     ~ShapeNode();
 
     virtual void postConstructor();
+
+	MStatus setDependentsDirty( const MPlug &plugBeingDirtied, MPlugArray &affectedPlugs );
 
     virtual bool isBounded() const;
     virtual MBoundingBox boundingBox() const;
@@ -151,6 +156,8 @@ public:
 	// Callback from CacheReader to dirty VP2 geometry draw status for affected shapes.
 	static void dirtyVP2Geometry( const MString& fileName );
 
+	const double nodeTime() const;
+
 private:
     // Prohibited and not implemented.
     ShapeNode(const ShapeNode& obj);
@@ -166,6 +173,14 @@ private:
     mutable MString fCacheFileName;
 	mutable MString fResolvedCacheFileName;
     mutable MString fCacheGeomPath;
+
+	bool fCacheAnimSpeedDirty;
+	mutable double fCacheAnimSpeed;
+	bool fCacheAnimOffsetDirty;
+	mutable double fCacheAnimOffset;
+	bool fCacheAnimTypeDirty;
+	mutable short fCacheAnimType;
+	mutable TimeInterval fCacheAnimTimeInterval;
 	
 	mutable ShapeNodePrivate::BufferCache* fBufferCache;
 	mutable std::vector<gpuCacheSpatialSubdivision *> fSpatialSub;
