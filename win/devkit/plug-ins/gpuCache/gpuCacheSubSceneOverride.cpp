@@ -5264,7 +5264,7 @@ void SubSceneOverride::update(MSubSceneContainer&  container,
     }
 
     // Current time in seconds
-    fTimeInSeconds = MAnimControl::currentTime().as(MTime::kSeconds);
+	fTimeInSeconds = fShapeNode->nodeTime();
 
     // Update the render items.
     if (fUpdateRenderItemsRequired) {

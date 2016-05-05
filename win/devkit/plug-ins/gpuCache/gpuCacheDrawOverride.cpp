@@ -1317,6 +1317,7 @@ MUserData* DrawOverride::prepareForDraw(
 
     MObject object    = objPath.node();
     MObject transform = objPath.transform();
+	double seconds = 0.0;
 
     // Retrieve data cache (create if does not exist)
     UserData* data = dynamic_cast<UserData*>(oldData);
@@ -1327,8 +1328,9 @@ MUserData* DrawOverride::prepareForDraw(
         MFnDependencyNode node(object, &status);
         if (status)
         {
-            data = new UserData(
-                dynamic_cast<ShapeNode*>(node.userNode()));
+			ShapeNode* shapeNode = dynamic_cast<ShapeNode*>(node.userNode());
+            data = new UserData(shapeNode);
+			seconds = shapeNode->nodeTime();
         }
     }
 
@@ -1344,9 +1346,9 @@ MUserData* DrawOverride::prepareForDraw(
             (displayStatus == kActive) ||
             (displayStatus == kLead)   ||
             (displayStatus == kHilite);
-
+		
         data->set(
-            MAnimControl::currentTime().as(MTime::kSeconds),
+            seconds,
             wireframeColor,
             isSelected);
     }
