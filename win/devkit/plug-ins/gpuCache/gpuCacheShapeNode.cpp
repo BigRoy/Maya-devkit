@@ -2546,7 +2546,6 @@ const double ShapeNode::nodeTime() const
 		plug.getValue(fCacheAnimType);
 	}
 
-
     const SubNode::Ptr geom = getCachedGeometry();
     if (!geom) return 0.0;
 
@@ -2555,20 +2554,20 @@ const double ShapeNode::nodeTime() const
 
 	fCacheAnimTimeInterval = geomData->animTimeRange();
 
+	// Initialize variables
+	double frame = (double)(MAnimControl::currentTime().as(MTime::kSeconds));
+	double one_frame_in_seconds = MTime(1.0, MTime::uiUnit()).as(MTime::kSeconds);
+	double animStart = fCacheAnimTimeInterval.startTime();
+	double animLength = fCacheAnimTimeInterval.endTime() - animStart + one_frame_in_seconds;
+	double animOffset = fCacheAnimOffset;
+	double speed = fCacheAnimSpeed;
+
+	// Start at animation start frame (to act like VRayMesh)
+	frame += animStart;
+
 	if (fCacheAnimType == 0) // Loop
 	{
 		// the animation is looped by skipping to the first frame once it has finished
-
-		// init values
-
-		double one_frame_in_seconds = MTime(1.0, MTime::uiUnit()).as(MTime::kSeconds);
-
-		double frame = (double)(MAnimControl::currentTime().as(MTime::kSeconds));
-		double animOffset = fCacheAnimOffset;
-		double speed = fCacheAnimSpeed;
-		double animStart = fCacheAnimTimeInterval.startTime();
-		double animLength = fCacheAnimTimeInterval.endTime() - animStart + one_frame_in_seconds;
-		
 		// chaosgroup loop
 		frame=fmod(animOffset+(frame-animStart)*speed, animLength);
 		if (frame<0)
@@ -2580,12 +2579,6 @@ const double ShapeNode::nodeTime() const
 	}
 	else if (fCacheAnimType == 1) // Play Once
 	{
-		// init values
-		double frame = (double)(MAnimControl::currentTime().as(MTime::kSeconds));
-		double animOffset = fCacheAnimOffset;
-		double speed = fCacheAnimSpeed;
-		double animStart = fCacheAnimTimeInterval.startTime();
-		
 		// chaosgroup play once
 		frame = (animOffset + (frame-animStart)*speed) + animStart;
 		return frame;
@@ -2594,15 +2587,7 @@ const double ShapeNode::nodeTime() const
 	{
 		// The animation is looped by playing it backwards once the last frame 
 		// has been reached and then playing it forward again when the first frame is reached
-		double one_frame_in_seconds = MTime(1.0, MTime::uiUnit()).as(MTime::kSeconds);
 		double two_frames_in_seconds = 2*one_frame_in_seconds;
-
-		// init values
-		double frame = (double)(MAnimControl::currentTime().as(MTime::kSeconds));
-		double animOffset = fCacheAnimOffset;
-		double speed = fCacheAnimSpeed;
-		double animStart = fCacheAnimTimeInterval.startTime();
-		double animLength = fCacheAnimTimeInterval.endTime() - animStart + one_frame_in_seconds;
 
 		// chaosgroup ping pong: http://forums.chaosgroup.com/showthread.php?83634-VRayMesh&p=659199#post659199
 		frame=fmod(animOffset+(frame-animStart)*speed, animLength*2-two_frames_in_seconds); // subtract 2 to remove the duplicate frames
@@ -2621,7 +2606,7 @@ const double ShapeNode::nodeTime() const
 		// Still - the animation is not played. 
 		// Instead just one frame of the animation is shown. 
 		// You can select which that frame is with the help of the Start offset parameter.
-		return fCacheAnimOffset;
+		return fCacheAnimOffset + animStart;
 	}
 	else {
 		return 0.0;
